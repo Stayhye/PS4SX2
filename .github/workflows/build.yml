@@ -13,7 +13,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ps4-build-${{ github.ref }}
+  group: ps4-build-${{ github.ref }} 
   cancel-in-progress: true
 
 env:
