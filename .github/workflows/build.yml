@@ -17,7 +17,6 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Keep the release URL and checksum paired when updating the SDK snapshot.
   PS4_SDK_URL: ${{ vars.PS4_SDK_URL || 'https://github.com/Phoenixx1202/PS4SX2-SDK/releases/download/sdk-v2/ps4sx2-sdk-v2.tar.gz' }}
   PS4_SDK_SHA256: ${{ vars.PS4_SDK_SHA256 || '0d7261c3e6c8e8d8e2e71d13ee9f39bcba8936fa1d50dbfce6e279c3c4e99822' }}
 
@@ -37,16 +36,13 @@ jobs:
       - name: Restore PS4 SDK
         run: python3 tools/ci/fetch-sdk.py --destination "$RUNNER_TEMP/ps4-sdk" --component linux
 
-      - name: Install host build tools
+      - name: Install host build tools (Pinned to Clang 12 compatibility)
         run: |
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y ca-certificates curl gnupg cmake ninja-build rsync python3 libxml2 libtinfo6 zlib1g
-          curl --fail --location --retry 3 https://apt.llvm.org/llvm-snapshot.gpg.key -o "$RUNNER_TEMP/llvm.asc"
-          gpg --dearmor < "$RUNNER_TEMP/llvm.asc" | sudo tee /usr/share/keyrings/llvm-ci.gpg >/dev/null
-          echo 'deb [signed-by=/usr/share/keyrings/llvm-ci.gpg] https://apt.llvm.org/noble/ llvm-toolchain-noble-21 main' | sudo tee /etc/apt/sources.list.d/llvm-ci.list
-          sudo apt-get update
-          sudo apt-get install -y clang-21 llvm-21 lld-21
+          # Install LLVM/Clang 12 to match the OpenOrbis toolchain linker reader version
+          sudo apt-get install -y clang-12 llvm-12 lld-12
 
       - name: Compile and generate EBOOT
         run: |
@@ -61,18 +57,19 @@ jobs:
           export VM_BUILD_DIR="$RUNNER_TEMP/ps4sx2-build"
           export PCSX2_VM_JIT=ON PCSX2_VM_FASTMEM=ON PCSX2_VM_MTVU=ON
           
-          # --- High-Performance Optimization Flags ---
-          export CFLAGS="-O3 -march=btver2 -mtune=btver2 -flto -fomit-frame-pointer"
-          export CXXFLAGS="-O3 -march=btver2 -mtune=btver2 -flto -fomit-frame-pointer"
-          export LDFLAGS="-fltovisible -Wl,-O3"
-          export CMAKE_INTERPROCEDURAL_OPTIMIZATION=ON
-          # -------------------------------------------
-
+          # Force compiler binaries to clang-12
+          export CC=clang-12
+          export CXX=clang++-12
+          
+          # Safe microarchitecture optimization flags (omitting global -flto to prevent linker mismatch)
+          export CFLAGS="-O3 -march=btver2 -mtune=btver2 -fomit-frame-pointer"
+          export CXXFLAGS="-O3 -march=btver2 -mtune=btver2 -fomit-frame-pointer"
+          
           chmod +x "$OPENORBIS"/bin/*
           bash ps4/vm/build-wsl.sh 2 2>&1 | tee ci-output/compile.log
           cp ps4/vm/build/{eboot.bin,vm_boot,vm_boot.oelf} ci-output/
           printf 'Commit: %s\nSDK SHA256: %s\n' "$GITHUB_SHA" "$PS4_SDK_SHA256" > ci-output/build-info.txt
-          clang-21 --version >> ci-output/build-info.txt
+          clang-12 --version >> ci-output/build-info.txt
 
       - name: Upload executable and symbols
         uses: actions/upload-artifact@v7
