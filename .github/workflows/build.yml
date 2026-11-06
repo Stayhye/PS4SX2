@@ -60,6 +60,14 @@ jobs:
           export VM_SOURCE_STAGE="$RUNNER_TEMP/ps4sx2-src"
           export VM_BUILD_DIR="$RUNNER_TEMP/ps4sx2-build"
           export PCSX2_VM_JIT=ON PCSX2_VM_FASTMEM=ON PCSX2_VM_MTVU=ON
+          
+          # --- High-Performance Optimization Flags ---
+          export CFLAGS="-O3 -march=btver2 -mtune=btver2 -flto -fomit-frame-pointer"
+          export CXXFLAGS="-O3 -march=btver2 -mtune=btver2 -flto -fomit-frame-pointer"
+          export LDFLAGS="-fltovisible -Wl,-O3"
+          export CMAKE_INTERPROCEDURAL_OPTIMIZATION=ON
+          # -------------------------------------------
+
           chmod +x "$OPENORBIS"/bin/*
           bash ps4/vm/build-wsl.sh 2 2>&1 | tee ci-output/compile.log
           cp ps4/vm/build/{eboot.bin,vm_boot,vm_boot.oelf} ci-output/
