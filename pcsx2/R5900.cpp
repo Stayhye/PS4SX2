@@ -421,145 +421,116 @@ static float s_orbis_ratio = 8.0f;
 __fi void _cpuEventTest_Shared()
 {
 #if defined(PCSX2_PS4_VM_BOOT)
-	PS4EEEventProfile::EventScope event_profile(&cpuRegs.pc);
-	if (PS4EEHotspots::enabled)
-		PS4EEHotspots::SampleEvent(cpuRegs.pc, cpuRegs.interrupt);
+    PS4EEEventProfile::EventScope event_profile(&cpuRegs.pc);
+    if (PS4EEHotspots::enabled) [[unlikely]]
+        PS4EEHotspots::SampleEvent(cpuRegs.pc, cpuRegs.interrupt);
 #endif
-	OrbisPrefetchEventLines(); // vk-285-98
-	eeEventTestIsActive = true;
-	cpuRegs.nextEventCycle = cpuRegs.cycle + eeWaitCycles;
-	cpuRegs.lastEventCycle = cpuRegs.cycle;
-	// ---- INTC / DMAC (CPU-level Exceptions) -----------------
-	// Done first because exceptions raised during event tests need to be postponed a few
-	// cycles (fixes Grandia II [PAL], which does a spin loop on a vsync and expects to
-	// be able to read the value before the exception handler clears it).
+    OrbisPrefetchEventLines(); // vk-285-98
+    eeEventTestIsActive = true;
+    cpuRegs.nextEventCycle = cpuRegs.cycle + eeWaitCycles;
+    cpuRegs.lastEventCycle = cpuRegs.cycle;
 
-	uint mask = intcInterrupt() | dmacInterrupt();
-	ORBIS_EEDIAG(if (cpuRegs.interrupt & ((1u << DMAC_VIF1) | (1u << DMAC_GIF) | (1u << VU_MTVU_BUSY))) OrbisEEDiag::ev_dma++); // vk-285-100
-	if (cpuIntsEnabled(mask))
-	{
-		ORBIS_EEDIAG(OrbisEEDiag::exc_intc += (mask & 0x400) != 0; OrbisEEDiag::exc_dmac += (mask & 0x800) != 0); // vk-285-100
-		cpuException(mask, cpuRegs.branch);
-	}
+    // ---- INTC / DMAC (CPU-level Exceptions) -----------------
+    uint mask = intcInterrupt() | dmacInterrupt();
+    ORBIS_EEDIAG(if (cpuRegs.interrupt & ((1u << DMAC_VIF1) | (1u << DMAC_GIF) | (1u << VU_MTVU_BUSY))) OrbisEEDiag::ev_dma++); // vk-285-100
+    if (cpuIntsEnabled(mask)) [[unlikely]]
+    {
+        ORBIS_EEDIAG(OrbisEEDIag::exc_intc += (mask & 0x400) != 0; OrbisEEDIag::exc_dmac += (mask & 0x800) != 0); // vk-285-100
+        cpuException(mask, cpuRegs.branch);
+    }
 
-	// ---- IOP -------------
+    // ---- IOP -------------
 #if defined(PCSX2_PS4_VM_BOOT)
-	event_profile.Checkpoint(PS4EEEventProfile::Phase::Exceptions);
+    event_profile.Checkpoint(PS4EEEventProfile::Phase::Exceptions);
 #endif
-	// * It's important to run a iopEventTest before calling ExecuteBlock. This
-	//   is because the IOP does not always perform branch tests before returning
-	//   (during the prev branch) and also so it can act on the state the EE has
-	//   given it before executing any code.
-	//
-	// * The IOP cannot always be run.  If we run IOP code every time through the
-	//   cpuEventTest, the IOP generally starts to run way ahead of the EE.
 
-	// It's also important to sync up the IOP before updating the timers, since gates will depend on starting/stopping in the right place!
-	EEsCycle += cpuRegs.cycle - EEoCycle;
-	EEoCycle = cpuRegs.cycle;
+    EEsCycle += cpuRegs.cycle - EEoCycle;
+    EEoCycle = cpuRegs.cycle;
 
-	if (EEsCycle > 0)
-		iopEventAction = true;
+    if (EEsCycle > 0) [[likely]]
+        iopEventAction = true;
 
-	if (iopEventAction)
-	{
-		//if( EEsCycle < -450 )
-		//	Console.WriteLn( " IOP ahead by: %d cycles", -EEsCycle );
+    if (iopEventAction) [[unlikely]]
+    {
+        EEsCycle = psxCpu->ExecuteBlock(EEsCycle);
+        iopEventAction = false;
+    }
 
-		EEsCycle = psxCpu->ExecuteBlock(EEsCycle);
-
-		iopEventAction = false;
-	}
-
-	iopEventTest();
+    iopEventTest();
 #if defined(PCSX2_PS4_VM_BOOT)
-	event_profile.Checkpoint(PS4EEEventProfile::Phase::IOP);
+    event_profile.Checkpoint(PS4EEEventProfile::Phase::IOP);
 #endif
 
-	if (cpuTestCycle(nextStartCounter, nextDeltaCounter))
-	{
-		ORBIS_EEDIAG(OrbisEEDiag::rcnt++); // vk-285-100
-		rcntUpdate();
-		_cpuTestPERF();
-	}
+    if (cpuTestCycle(nextStartCounter, nextDeltaCounter)) [[unlikely]]
+    {
+        ORBIS_EEDIAG(OrbisEEDIag::rcnt++); // vk-285-100
+        rcntUpdate();
+        _cpuTestPERF();
+    }
 
-	_cpuTestTIMR();
+    _cpuTestTIMR();
 #if defined(PCSX2_PS4_VM_BOOT)
-	event_profile.Checkpoint(PS4EEEventProfile::Phase::Timers);
+    event_profile.Checkpoint(PS4EEEventProfile::Phase::Timers);
 #endif
 
-	// ---- Interrupts -------------
-	// These are basically just DMAC-related events, which also piggy-back the same bits as
-	// the PS2's own DMA channel IRQs and IRQ Masks.
+    // ---- Interrupts -------------
+    if (cpuRegs.interrupt) [[unlikely]]
+    {
+        if (CHECK_INSTANTDMAHACK && dmacRegs.ctrl.DMAE && !(psHu8(DMAC_ENABLER + 2) & 1) && (cpuRegs.interrupt & 0x1FFFF)) [[unlikely]]
+        {
+            g_orbis_instant_dma_loop = true; // vk-285-100 (Vif1_Dma.cpp OrbisVif1Fuse)
+            while ((cpuRegs.interrupt & 0x1FFFF) && _cpuTestInterrupts())
+                ;
+            g_orbis_instant_dma_loop = false;
+        }
+        else
+        {
+            _cpuTestInterrupts();
+        }
+    }
 
-	if (cpuRegs.interrupt)
-	{
-		// This is a BIOS hack because the coding in the BIOS is terrible but the bug is masked by Data Cache
-		// where a DMA buffer is overwritten without waiting for the transfer to end, which causes the fonts to get all messed up
-		// so to fix it, we run all the DMA's instantly when in the BIOS.
-		// Only use the lower 17 bits of the cpuRegs.interrupt as the upper bits are for VU0/1 sync which can't be done in a tight loop
-		if (CHECK_INSTANTDMAHACK && dmacRegs.ctrl.DMAE && !(psHu8(DMAC_ENABLER + 2) & 1) && (cpuRegs.interrupt & 0x1FFFF))
-		{
-			g_orbis_instant_dma_loop = true; // vk-285-100 (Vif1_Dma.cpp OrbisVif1Fuse)
-			while ((cpuRegs.interrupt & 0x1FFFF) && _cpuTestInterrupts())
-				;
-			g_orbis_instant_dma_loop = false;
-		}
-		else
-			_cpuTestInterrupts();
-	}
-
-	// ---- VU Sync -------------
+    // ---- VU Sync -------------
 #if defined(PCSX2_PS4_VM_BOOT)
-	event_profile.Checkpoint(PS4EEEventProfile::Phase::DMA);
+    event_profile.Checkpoint(PS4EEEventProfile::Phase::DMA);
 #endif
-	// We're in a EventTest.  All dynarec registers are flushed
-	// so there is no need to freeze registers here.
-	CpuVU0->ExecuteBlock();
-	CpuVU1->ExecuteBlock();
+    CpuVU0->ExecuteBlock();
+    CpuVU1->ExecuteBlock();
 #if defined(PCSX2_PS4_VM_BOOT)
-	event_profile.Checkpoint(PS4EEEventProfile::Phase::VU);
+    event_profile.Checkpoint(PS4EEEventProfile::Phase::VU);
 #endif
 
-	// ---- Schedule Next Event Test --------------
-	if (s_orbis_ratio_psxclk != PSXCLK) // vk-285-98
-	{
-		s_orbis_ratio_psxclk = PSXCLK;
-		s_orbis_ratio = static_cast<float>(PS2CLK) / static_cast<float>(PSXCLK);
-	}
-	const float mutiplier = s_orbis_ratio;
-	const int nextIopEventDeta = ((psxRegs.iopNextEventCycle - psxRegs.cycle) * mutiplier);
-	// 8 or more cycles behind and there's an event scheduled
-	g_orbis_ee_evtests.store(g_orbis_ee_evtests.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed); // vk-285-90
-	if (EEsCycle >= nextIopEventDeta)
-	{
-		// EE's running way ahead of the IOP still, so we should branch quickly to give the
-		// IOP extra timeslices in short order.
+    // ---- Schedule Next Event Test --------------
+    if (s_orbis_ratio_psxclk != PSXCLK) [[unlikely]] // vk-285-98
+    {
+        s_orbis_ratio_psxclk = PSXCLK;
+        s_orbis_ratio = static_cast<float>(PS2CLK) / static_cast<float>(PSXCLK);
+    }
+    
+    const float mutiplier = s_orbis_ratio;
+    const int nextIopEventDeta = static_cast<int>((psxRegs.iopNextEventCycle - psxRegs.cycle) * mutiplier);
+    
+    g_orbis_ee_evtests.store(g_orbis_ee_evtests.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed); // vk-285-90
+    
+    if (EEsCycle >= nextIopEventDeta) [[unlikely]]
+    {
+        ORBIS_EEDIAG(OrbisEEDIag::iop_rapid++); // vk-285-100
+        cpuSetNextEventDelta(48);
+    }
+    else [[likely]]
+    {
+        cpuSetNextEventDelta(nextIopEventDeta - EEsCycle);
+    }
 
-		ORBIS_EEDIAG(OrbisEEDiag::iop_rapid++); // vk-285-100
-		cpuSetNextEventDelta(48);
-		//Console.Warning( "EE ahead of the IOP -- Rapid Event!  %d", EEsCycle );
-	}
-	else
-	{
-		// Otherwise IOP is caught up/not doing anything so we can wait for the next event.
-		cpuSetNextEventDelta(((psxRegs.iopNextEventCycle - psxRegs.cycle) * mutiplier) - EEsCycle);
-	}
+    cpuSetNextEvent(nextStartCounter, nextDeltaCounter);
 
-	// Apply vsync and other counter nextCycles
-	cpuSetNextEvent(nextStartCounter, nextDeltaCounter);
+    if (EmuConfig.Speedhacks.WaitLoop &&
+        (cpuRegs.pc == 0x00118cc0 || cpuRegs.pc == 0x00118cb0) &&
+        cpuRegs.GPR.r[2].UL[0] == 0 && cpuRegs.nextEventCycle > cpuRegs.cycle) [[unlikely]]
+    {
+        cpuRegs.cycle = cpuRegs.nextEventCycle;
+    }
 
-	/* Ratchet & Clank SCES-50916 has a pure guest-side wait at 0x00118cc0:
-	 * lw v0,0(sp); beq v0,zero,loop. Fast-forward only while the flag is
-	 * zero; the next scheduled event still runs before checking it again. */
-	if (EmuConfig.Speedhacks.WaitLoop &&
-		(cpuRegs.pc == 0x00118cc0 || cpuRegs.pc == 0x00118cb0) &&
-		cpuRegs.GPR.r[2].UL[0] == 0 && cpuRegs.nextEventCycle > cpuRegs.cycle)
-	{
-		cpuRegs.cycle = cpuRegs.nextEventCycle;
-	}
-
-	eeEventTestIsActive = false;
+    eeEventTestIsActive = false;
 }
 
 __ri void cpuTestINTCInts()
