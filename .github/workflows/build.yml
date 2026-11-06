@@ -64,14 +64,18 @@ jobs:
           export CC=clang-21
           export CXX=clang++-21
           
-          # FIX: Symlink host lld-21 over the SDK's bundled ld.lld to prevent version mismatches
-          ln -sf /usr/bin/lld-21 "$OPENORBIS/bin/ld.lld"
+          # Create a local custom bin directory and prepend it to PATH with the lld symlink
+          mkdir -p "$RUNNER_TEMP/custom-bin"
+          ln -sf /usr/bin/lld-21 "$RUNNER_TEMP/custom-bin/ld.lld"
+          export PATH="$RUNNER_TEMP/custom-bin:$PATH"
           
           # Optimization flags targeting AMD Jaguar cores (-march=btver2)
           export CFLAGS="-O3 -march=btver2 -mtune=btver2 -fomit-frame-pointer"
           export CXXFLAGS="-O3 -march=btver2 -mtune=btver2 -fomit-frame-pointer"
           
-          chmod +x "$OPENORBIS"/bin/*
+          # Ensure openorbis binaries are executable without touching read-only system files
+          find "$OPENORBIS/bin" -type f -exec chmod +x {} + || true
+          
           bash ps4/vm/build-wsl.sh 2 2>&1 | tee ci-output/compile.log
           cp ps4/vm/build/{eboot.bin,vm_boot,vm_boot.oelf} ci-output/
           printf 'Commit: %s\nSDK SHA256: %s\n' "$GITHUB_SHA" "$PS4_SDK_SHA256" > ci-output/build-info.txt
