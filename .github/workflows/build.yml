@@ -133,7 +133,7 @@ jobs:
       - name: Upload installable package
         uses: actions/upload-artifact@v7
         with:
-          name: PS4SX2-PKG-${{ github.run_number }}
+          name: PS4SX2-PKG-${{ github.run_number }} 
           path: |
             ci-output/*.pkg
             ci-output/SHA256SUMS.txt
