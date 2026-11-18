@@ -22,7 +22,7 @@ env:
 
 jobs:
   compile:
-    name: Compile PS4 executable
+    name: Compile PS4 executable 
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     defaults:
